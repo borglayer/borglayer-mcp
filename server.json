@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.borglayer/marketplace",
+  "description": "Search, appraise, and purchase domains from the BorgLayer marketplace. AI agents can discover domains, get appraisals, and (with authorization + spending limits) complete escrow-backed purchases in USDC.",
+  "version": "1.0.0",
+  "homepage": "https://borglayer.com",
+  "repository": { "url": "https://github.com/borglayer/borglayer-mcp", "source": "github" },
+  "remotes": [
+    { "transport": "sse", "url": "https://mcp.borglayer.com/sse" }
+  ],
+  "authentication": {
+    "type": "bearer",
+    "instructions": "Get an API key at https://borglayer.com — pass as Authorization: Bearer blk_live_..."
+  },
+  "tools": [
+    { "name": "search_domains", "description": "Search marketplace domain listings" },
+    { "name": "get_domain", "description": "Domain details, listing, and appraisal" },
+    { "name": "get_appraisal", "description": "Four-tier domain appraisal in USDC" },
+    { "name": "list_listings", "description": "Browse active listings" },
+    { "name": "create_checkout", "description": "Create an escrow checkout (requires checkout.write scope + spending limit)" },
+    { "name": "get_order", "description": "Order details" },
+    { "name": "get_order_status", "description": "Order status" }
+  ]
+}

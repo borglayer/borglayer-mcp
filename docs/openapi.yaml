@@ -1,0 +1,98 @@
+openapi: 3.1.0
+info:
+  title: BorgLayer Marketplace API
+  version: "1.0.0"
+  description: |
+    Programmable domain commerce. Search, evaluate, and buy domains via REST,
+    or connect an AI agent through the MCP server at mcp.borglayer.com/sse.
+  contact:
+    name: BorgLayer
+    url: https://borglayer.com
+servers:
+  - url: https://api.borglayer.com/api/v1
+    description: Production
+components:
+  securitySchemes:
+    ApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: "blk_live_... / blk_test_..."
+  schemas:
+    Listing:
+      type: object
+      properties:
+        listing_id: { type: string, format: uuid }
+        domain: { type: string }
+        price: { type: string }
+        price_micro: { type: integer }
+        currency: { type: string }
+        status: { type: string }
+security:
+  - ApiKey: []
+paths:
+  /domains/search:
+    get:
+      summary: Search domain listings
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 50 } }
+      responses: { "200": { description: Matching listings } }
+  /domains/{domain}:
+    get:
+      summary: Domain details + appraisal
+      parameters:
+        - { name: domain, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: Domain details, listing, appraisal } }
+  /domains/{domain}/appraisal:
+    get:
+      summary: Domain appraisal
+      parameters:
+        - { name: domain, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: Four-tier appraisal (USDC) } }
+  /listings:
+    get:
+      summary: Browse active listings
+      parameters:
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses: { "200": { description: Paginated listings } }
+  /listings/{id}:
+    get:
+      summary: Listing detail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: Listing } }
+  /checkout:
+    post:
+      summary: Create a checkout (escrow) for a listing
+      description: Requires scope checkout.write. Records commission attribution.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [listing_id, buyer_wallet]
+              properties:
+                listing_id: { type: string, format: uuid }
+                buyer_wallet: { type: string, pattern: "^0x[0-9a-fA-F]{40}$" }
+      responses: { "201": { description: Checkout created with payment details } }
+  /orders/{id}:
+    get:
+      summary: Order details
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: Order } }
+  /orders/{id}/status:
+    get:
+      summary: Order status
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: Status } }
+  /webhooks:
+    post:
+      summary: Register a signed webhook endpoint (public https only)
+      responses: { "201": { description: Webhook created, signing secret returned once } }
+    get:
+      summary: List your webhook endpoints
+      responses: { "200": { description: Endpoints } }
