@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.borglayerdev/borglayer-mcp",
-  "description": "Search, appraise & buy domains across 5 chains (USDC/USDT/USD1/USDG) via verified escrow.",
-  "version": "1.1.0",
+  "description": "The BorgLayer API for AI agents: search & register domains, transfer domains in, manage DNS, set registrant details, and form US LLCs — paid from a prepaid USDC account balance.",
+  "version": "2.0.0",
   "homepage": "https://borglayer.com",
   "repository": {
     "url": "https://github.com/borglayer/borglayer-mcp",
@@ -16,40 +16,23 @@
   ],
   "authentication": {
     "type": "bearer",
-    "instructions": "Get an API key at https://borglayer.com \u2014 pass as Authorization: Bearer blk_live_..."
+    "instructions": "Get a BorgLayer API key at https://borglayer.com and top up its prepaid USDC balance. Pass it as Authorization: Bearer blrk_... Each tool is scoped; register/transfer/formation debit the balance."
   },
   "tools": [
-    {
-      "name": "search_domains",
-      "description": "Search marketplace domain listings"
-    },
-    {
-      "name": "get_domain",
-      "description": "Domain details, listing, and appraisal"
-    },
-    {
-      "name": "get_appraisal",
-      "description": "Four-tier domain appraisal in USDC"
-    },
-    {
-      "name": "list_listings",
-      "description": "Browse active listings"
-    },
-    {
-      "name": "create_checkout",
-      "description": "Create an escrow checkout on the chosen chain + stablecoin (Base/Arbitrum/Polygon USDC, BNB USDC/USDT/USD1, Robinhood USDG). Requires checkout.write scope + spending limit."
-    },
-    {
-      "name": "list_chains",
-      "description": "List supported chains + stablecoins for payment, each with its verified escrow contract"
-    },
-    {
-      "name": "get_order",
-      "description": "Order details"
-    },
-    {
-      "name": "get_order_status",
-      "description": "Order status"
-    }
+    { "name": "search_domains", "description": "Search available domains, priced for your account" },
+    { "name": "list_domains", "description": "List the domains registered on your account" },
+    { "name": "get_balance", "description": "Your prepaid USDC account balance (micro-USDC)" },
+    { "name": "list_chains", "description": "Supported chains + stablecoins for funding, each with its verified escrow contract" },
+    { "name": "register_domain", "description": "Register an available domain (debits balance; scope domains.register)" },
+    { "name": "transfer_in_domain", "description": "Transfer a domain in from another registrar with its auth/EPP code (scope domains.transfer)" },
+    { "name": "list_dns", "description": "List a domain's DNS records (scope dns.read)" },
+    { "name": "add_dns_record", "description": "Add a DNS record (scope dns.write)" },
+    { "name": "delete_dns_record", "description": "Delete a DNS record by id (scope dns.write)" },
+    { "name": "list_registrant_profiles", "description": "List registrant (owner) profiles" },
+    { "name": "create_registrant_profile", "description": "Create a registrant profile — real owner data required for ccTLDs (scope registrant.write)" },
+    { "name": "delete_registrant_profile", "description": "Delete a registrant profile by id (scope registrant.write)" },
+    { "name": "formation_quote", "description": "Price a US LLC / entity formation with optional EIN + BOI (scope formation.read)" },
+    { "name": "create_formation", "description": "Form a US LLC / entity; debits balance then files (scope formation.write)" },
+    { "name": "get_formation", "description": "Status of a formation order by reference (scope formation.read)" }
   ]
 }
