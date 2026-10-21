@@ -61,86 +61,86 @@ function buildServer(apiKey) {
   // ---- read (read-only) ----
   server.registerTool("search_domains",
     { title: "Search domains", description: "Search available domains across BorgLayer's registrar (priced for your account).",
-      inputSchema: { q: z.string().min(1).max(64) }, annotations: { readOnlyHint: true } },
+      inputSchema: { q: z.string().min(1).max(64) }, annotations: { title: "Search domains", readOnlyHint: true } },
     async (a) => ok(await callApi(`/search${qs({ q: a.q })}`, apiKey)));
 
   server.registerTool("list_domains",
     { title: "List my domains", description: "List the domains registered on your BorgLayer account.",
-      inputSchema: {}, annotations: { readOnlyHint: true } },
+      inputSchema: {}, annotations: { title: "List my domains", readOnlyHint: true } },
     async () => ok(await callApi(`/domains`, apiKey)));
 
   server.registerTool("get_balance",
     { title: "Get account balance", description: "Get your BorgLayer account's prepaid USDC balance (in micro-USDC).",
-      inputSchema: {}, annotations: { readOnlyHint: true } },
+      inputSchema: {}, annotations: { title: "Get account balance", readOnlyHint: true } },
     async () => ok(await callApi(`/balance`, apiKey)));
 
   server.registerTool("list_chains",
     { title: "List funding chains", description: "List supported chains + stablecoins for funding, each with its verified escrow contract.",
-      inputSchema: {}, annotations: { readOnlyHint: true } },
+      inputSchema: {}, annotations: { title: "List funding chains", readOnlyHint: true } },
     async () => ok(await callApi(`/chains`, apiKey)));
 
   // ---- register (debits balance) ----
   server.registerTool("register_domain",
     { title: "Register a domain", description: "Register an available domain. Debits your prepaid USDC balance; returns the charge and remaining balance. Requires the domains.register scope. For country-code TLDs, set a default registrant profile first (create_registrant_profile).",
       inputSchema: { domain: z.string().min(3).max(253), years: z.number().int().min(1).max(10).optional() },
-      annotations: { destructiveHint: true } },
+      annotations: { title: "Register a domain", readOnlyHint: false, destructiveHint: true } },
     async (a) => ok(await callApi(`/register`, apiKey, { method: "POST", body: { domain: a.domain, years: a.years || 1 } })));
 
   // ---- transfer in (may debit balance) ----
   server.registerTool("transfer_in_domain",
     { title: "Transfer a domain in", description: "Transfer a domain you own at another registrar INTO BorgLayer. Needs the auth/EPP code from your current registrar (unlocked). Free for free ccTLDs; others include a 1-year extension debited from balance. Requires domains.transfer.",
       inputSchema: { domain: z.string().min(3).max(253), auth_code: z.string().max(255).optional(), whois_privacy: z.boolean().optional() },
-      annotations: { destructiveHint: true } },
+      annotations: { title: "Transfer a domain in", readOnlyHint: false, destructiveHint: true } },
     async (a) => ok(await callApi(`/transfer-in`, apiKey, { method: "POST", body: { domain: a.domain, auth_code: a.auth_code, whois_privacy: a.whois_privacy } })));
 
   // ---- DNS ----
   server.registerTool("list_dns",
     { title: "List DNS records", description: "List DNS records for a domain on your account.",
-      inputSchema: { domain: z.string().min(3).max(253) }, annotations: { readOnlyHint: true } },
+      inputSchema: { domain: z.string().min(3).max(253) }, annotations: { title: "List DNS records", readOnlyHint: true } },
     async (a) => ok(await callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey)));
 
   server.registerTool("add_dns_record",
     { title: "Add a DNS record", description: "Add a DNS record to a domain on your account. Requires dns.write.",
-      inputSchema: { domain: z.string().min(3).max(253), type: z.enum(["A","AAAA","CNAME","MX","TXT","NS","SRV","CAA"]), name: z.string().min(1).max(255), content: z.string().min(1).max(2000), ttl: z.number().int().min(60).max(604800).optional(), priority: z.number().int().min(0).max(65535).optional() } },
+      inputSchema: { domain: z.string().min(3).max(253), type: z.enum(["A","AAAA","CNAME","MX","TXT","NS","SRV","CAA"]), name: z.string().min(1).max(255), content: z.string().min(1).max(2000), ttl: z.number().int().min(60).max(604800).optional(), priority: z.number().int().min(0).max(65535).optional() }, annotations: { title: "Add a DNS record", readOnlyHint: false, destructiveHint: false } },
     async (a) => ok(await callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey, { method: "POST", body: { type: a.type, name: a.name, content: a.content, ttl: a.ttl, priority: a.priority } })));
 
   server.registerTool("delete_dns_record",
     { title: "Delete a DNS record", description: "Delete a DNS record by id from a domain on your account. Requires dns.write.",
-      inputSchema: { domain: z.string().min(3).max(253), record_id: z.string().min(1).max(64) }, annotations: { destructiveHint: true } },
+      inputSchema: { domain: z.string().min(3).max(253), record_id: z.string().min(1).max(64) }, annotations: { title: "Delete a DNS record", readOnlyHint: false, destructiveHint: true } },
     async (a) => ok(await callApi(`/domains/${encodeURIComponent(a.domain)}/dns/${encodeURIComponent(a.record_id)}`, apiKey, { method: "DELETE" })));
 
   // ---- registrant profiles ----
   server.registerTool("list_registrant_profiles",
     { title: "List registrant profiles", description: "List the registrant (owner) profiles on your account. Country-code domains require real registrant data.",
-      inputSchema: {}, annotations: { readOnlyHint: true } },
+      inputSchema: {}, annotations: { title: "List registrant profiles", readOnlyHint: true } },
     async () => ok(await callApi(`/registrant-profiles`, apiKey)));
 
   server.registerTool("create_registrant_profile",
     { title: "Create a registrant profile", description: "Create a registrant (owner) profile used as the real owner on registrations and transfers. WHOIS privacy masks it publicly where the TLD allows. Requires registrant.write.",
-      inputSchema: { first_name: z.string().max(120), last_name: z.string().max(120), email: z.string().email().max(200), phone: z.string().max(40), address_line1: z.string().max(200), city: z.string().max(120), postal_code: z.string().max(40), country: z.string().length(2), organization_name: z.string().max(200).optional(), address_line2: z.string().max(200).optional(), state: z.string().max(120).optional(), label: z.string().max(120).optional(), is_default: z.boolean().optional() } },
+      inputSchema: { first_name: z.string().max(120), last_name: z.string().max(120), email: z.string().email().max(200), phone: z.string().max(40), address_line1: z.string().max(200), city: z.string().max(120), postal_code: z.string().max(40), country: z.string().length(2), organization_name: z.string().max(200).optional(), address_line2: z.string().max(200).optional(), state: z.string().max(120).optional(), label: z.string().max(120).optional(), is_default: z.boolean().optional() }, annotations: { title: "Create a registrant profile", readOnlyHint: false, destructiveHint: false } },
     async (a) => ok(await callApi(`/registrant-profiles`, apiKey, { method: "POST", body: a })));
 
   server.registerTool("delete_registrant_profile",
     { title: "Delete a registrant profile", description: "Delete a registrant profile by id.",
-      inputSchema: { id: z.string().min(1).max(64) }, annotations: { destructiveHint: true } },
+      inputSchema: { id: z.string().min(1).max(64) }, annotations: { title: "Delete a registrant profile", readOnlyHint: false, destructiveHint: true } },
     async (a) => ok(await callApi(`/registrant-profiles/${encodeURIComponent(a.id)}`, apiKey, { method: "DELETE" })));
 
   // ---- LLC formation ----
   server.registerTool("formation_quote",
     { title: "Quote an LLC formation", description: "Get a price quote to form a US LLC (or other entity) in a given state, with optional EIN and BOI add-ons. Read-only.",
       inputSchema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), ein: z.boolean().optional(), boi: z.boolean().optional() },
-      annotations: { readOnlyHint: true } },
+      annotations: { title: "Quote an LLC formation", readOnlyHint: true } },
     async (a) => ok(await callApi(`/formation/quote${qs({ company: a.company, state: a.state, entity: a.entity, ein: a.ein ? 1 : "", boi: a.boi ? 1 : "" })}`, apiKey)));
 
   server.registerTool("create_formation",
     { title: "Form an LLC", description: "Form a US LLC (or other entity). Debits your prepaid USDC balance for the quoted amount, then files. Requires formation.write and a contact object (name/email/address). Returns the order reference + status.",
       inputSchema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), contact: z.record(z.any()), ein: z.boolean().optional(), boi: z.boolean().optional(), email: z.string().email().max(200).optional() },
-      annotations: { destructiveHint: true } },
+      annotations: { title: "Form an LLC", readOnlyHint: false, destructiveHint: true } },
     async (a) => ok(await callApi(`/formation`, apiKey, { method: "POST", body: a })));
 
   server.registerTool("get_formation",
     { title: "Get formation status", description: "Get the status of a formation order by its reference.",
-      inputSchema: { reference: z.string().min(1).max(64) }, annotations: { readOnlyHint: true } },
+      inputSchema: { reference: z.string().min(1).max(64) }, annotations: { title: "Get formation status", readOnlyHint: true } },
     async (a) => ok(await callApi(`/formation/${encodeURIComponent(a.reference)}`, apiKey)));
 
   return server;
