@@ -52,61 +52,65 @@ function makeServer(apiKey) {
     { capabilities: { tools: {} } }
   );
 
+  // Each tool declares MCP annotations: title (human label), and exactly one of
+  // ro:true (readOnlyHint — no state change) or destructive:true (destructiveHint —
+  // irreversible/charging). Writes that aren't destructive (add a DNS record,
+  // create a profile) are neither ro nor destructive.
   const tools = [
-    // ---- read ----
-    { name: "search_domains", desc: "Search available domains across BorgLayer's registrar (priced for your account).",
+    // ---- read (read-only) ----
+    { name: "search_domains", title: "Search domains", ro: true, desc: "Search available domains across BorgLayer's registrar (priced for your account).",
       schema: { q: z.string().min(1).max(64) },
       run: (a) => callApi(`/search${qs({ q: a.q })}`, apiKey) },
-    { name: "list_domains", desc: "List the domains registered on your BorgLayer account.",
+    { name: "list_domains", title: "List my domains", ro: true, desc: "List the domains registered on your BorgLayer account.",
       schema: {},
       run: () => callApi(`/domains`, apiKey) },
-    { name: "get_balance", desc: "Get your BorgLayer account's prepaid USDC balance (in micro-USDC).",
+    { name: "get_balance", title: "Get account balance", ro: true, desc: "Get your BorgLayer account's prepaid USDC balance (in micro-USDC).",
       schema: {},
       run: () => callApi(`/balance`, apiKey) },
-    { name: "list_chains", desc: "List supported chains + stablecoins for funding, each with its verified escrow contract.",
+    { name: "list_chains", title: "List funding chains", ro: true, desc: "List supported chains + stablecoins for funding, each with its verified escrow contract.",
       schema: {},
       run: () => callApi(`/chains`, apiKey) },
 
-    // ---- register (debits balance) ----
-    { name: "register_domain", desc: "Register an available domain. Debits your prepaid USDC balance; returns the charge and remaining balance. Requires the domains.register scope. For country-code TLDs, set a default registrant profile first (create_registrant_profile).",
+    // ---- register (debits balance — charging) ----
+    { name: "register_domain", title: "Register a domain", destructive: true, desc: "Register an available domain. Debits your prepaid USDC balance; returns the charge and remaining balance. Requires the domains.register scope. For country-code TLDs, set a default registrant profile first (create_registrant_profile).",
       schema: { domain: z.string().min(3).max(253), years: z.number().int().min(1).max(10).optional() },
       run: (a) => callApi(`/register`, apiKey, { method: "POST", body: { domain: a.domain, years: a.years || 1 } }) },
 
-    // ---- transfer in (debits balance / free for free ccTLDs) ----
-    { name: "transfer_in_domain", desc: "Transfer a domain you own at another registrar INTO BorgLayer. Needs the auth/EPP code from your current registrar (unlocked). Free for free ccTLDs; others include a 1-year extension debited from balance. Requires domains.transfer.",
+    // ---- transfer in (may debit balance — charging) ----
+    { name: "transfer_in_domain", title: "Transfer a domain in", destructive: true, desc: "Transfer a domain you own at another registrar INTO BorgLayer. Needs the auth/EPP code from your current registrar (unlocked). Free for free ccTLDs; others include a 1-year extension debited from balance. Requires domains.transfer.",
       schema: { domain: z.string().min(3).max(253), auth_code: z.string().max(255).optional(), whois_privacy: z.boolean().optional() },
       run: (a) => callApi(`/transfer-in`, apiKey, { method: "POST", body: { domain: a.domain, auth_code: a.auth_code, whois_privacy: a.whois_privacy } }) },
 
     // ---- DNS ----
-    { name: "list_dns", desc: "List DNS records for a domain on your account.",
+    { name: "list_dns", title: "List DNS records", ro: true, desc: "List DNS records for a domain on your account.",
       schema: { domain: z.string().min(3).max(253) },
       run: (a) => callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey) },
-    { name: "add_dns_record", desc: "Add a DNS record to a domain on your account. Requires dns.write.",
+    { name: "add_dns_record", title: "Add a DNS record", desc: "Add a DNS record to a domain on your account. Requires dns.write.",
       schema: { domain: z.string().min(3).max(253), type: z.enum(["A","AAAA","CNAME","MX","TXT","NS","SRV","CAA"]), name: z.string().min(1).max(255), content: z.string().min(1).max(2000), ttl: z.number().int().min(60).max(604800).optional(), priority: z.number().int().min(0).max(65535).optional() },
       run: (a) => callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey, { method: "POST", body: { type: a.type, name: a.name, content: a.content, ttl: a.ttl, priority: a.priority } }) },
-    { name: "delete_dns_record", desc: "Delete a DNS record by id from a domain on your account. Requires dns.write.",
+    { name: "delete_dns_record", title: "Delete a DNS record", destructive: true, desc: "Delete a DNS record by id from a domain on your account. Requires dns.write.",
       schema: { domain: z.string().min(3).max(253), record_id: z.string().min(1).max(64) },
       run: (a) => callApi(`/domains/${encodeURIComponent(a.domain)}/dns/${encodeURIComponent(a.record_id)}`, apiKey, { method: "DELETE" }) },
 
     // ---- registrant profiles (required owner data for ccTLDs) ----
-    { name: "list_registrant_profiles", desc: "List the registrant (owner) profiles on your account. Country-code domains require real registrant data.",
+    { name: "list_registrant_profiles", title: "List registrant profiles", ro: true, desc: "List the registrant (owner) profiles on your account. Country-code domains require real registrant data.",
       schema: {},
       run: () => callApi(`/registrant-profiles`, apiKey) },
-    { name: "create_registrant_profile", desc: "Create a registrant (owner) profile used as the real owner on registrations and transfers. WHOIS privacy masks it publicly where the TLD allows. Requires registrant.write.",
+    { name: "create_registrant_profile", title: "Create a registrant profile", desc: "Create a registrant (owner) profile used as the real owner on registrations and transfers. WHOIS privacy masks it publicly where the TLD allows. Requires registrant.write.",
       schema: { first_name: z.string().max(120), last_name: z.string().max(120), email: z.string().email().max(200), phone: z.string().max(40), address_line1: z.string().max(200), city: z.string().max(120), postal_code: z.string().max(40), country: z.string().length(2), organization_name: z.string().max(200).optional(), address_line2: z.string().max(200).optional(), state: z.string().max(120).optional(), label: z.string().max(120).optional(), is_default: z.boolean().optional() },
       run: (a) => callApi(`/registrant-profiles`, apiKey, { method: "POST", body: a }) },
-    { name: "delete_registrant_profile", desc: "Delete a registrant profile by id.",
+    { name: "delete_registrant_profile", title: "Delete a registrant profile", destructive: true, desc: "Delete a registrant profile by id.",
       schema: { id: z.string().min(1).max(64) },
       run: (a) => callApi(`/registrant-profiles/${encodeURIComponent(a.id)}`, apiKey, { method: "DELETE" }) },
 
     // ---- LLC formation ----
-    { name: "formation_quote", desc: "Get a price quote to form a US LLC (or other entity) in a given state, with optional EIN and BOI add-ons. Read-only.",
+    { name: "formation_quote", title: "Quote an LLC formation", ro: true, desc: "Get a price quote to form a US LLC (or other entity) in a given state, with optional EIN and BOI add-ons. Read-only.",
       schema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), ein: z.boolean().optional(), boi: z.boolean().optional() },
       run: (a) => callApi(`/formation/quote${qs({ company: a.company, state: a.state, entity: a.entity, ein: a.ein ? 1 : "", boi: a.boi ? 1 : "" })}`, apiKey) },
-    { name: "create_formation", desc: "Form a US LLC (or other entity). Debits your prepaid USDC balance for the quoted amount, then files. Requires formation.write and a contact object (name/email/address). Returns the order reference + status.",
+    { name: "create_formation", title: "Form an LLC", destructive: true, desc: "Form a US LLC (or other entity). Debits your prepaid USDC balance for the quoted amount, then files. Requires formation.write and a contact object (name/email/address). Returns the order reference + status.",
       schema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), contact: z.record(z.any()), ein: z.boolean().optional(), boi: z.boolean().optional(), email: z.string().email().max(200).optional() },
       run: (a) => callApi(`/formation`, apiKey, { method: "POST", body: a }) },
-    { name: "get_formation", desc: "Get the status of a formation order by its reference.",
+    { name: "get_formation", title: "Get formation status", ro: true, desc: "Get the status of a formation order by its reference.",
       schema: { reference: z.string().min(1).max(64) },
       run: (a) => callApi(`/formation/${encodeURIComponent(a.reference)}`, apiKey) },
   ];
@@ -122,6 +126,11 @@ function makeServer(apiKey) {
   server.setRequestHandler({ method: "tools/list" }, async () => ({
     tools: tools.map(t => ({
       name: t.name, description: t.desc,
+      annotations: {
+        title: t.title,
+        readOnlyHint: !!t.ro,
+        destructiveHint: !!t.destructive,
+      },
       inputSchema: {
         type: "object",
         properties: Object.fromEntries(Object.entries(t.schema).map(([k, v]) => {

@@ -1,6 +1,6 @@
 {
   "name": "borglayer-mcp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "BorgLayer MCP — AI agents search, appraise, register, transfer, and buy domains, manage DNS, and form LLCs via the BorgLayer API, with on-chain escrow across 5 chains.",
   "type": "module",
   "private": true,
