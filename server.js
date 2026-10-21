@@ -167,9 +167,30 @@ async function handleMcp(req, res) {
 }
 
 app.post("/mcp", handleMcp);
-// GET/DELETE on /mcp: stateless server has no standalone stream or session to end.
-app.get("/mcp", (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method Not Allowed. Use POST for stateless Streamable HTTP." }, id: null }));
-app.delete("/mcp", (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method Not Allowed." }, id: null }));
+
+// GET /mcp: clients open this to receive the server->client SSE stream. In stateless
+// mode there is no standing stream, so return an open, empty text/event-stream with 200
+// (and keep the key gate) rather than 405 — a 405 here makes some MCP clients report the
+// whole connection as failed.
+app.get("/mcp", (req, res) => {
+  const apiKey = keyFrom(req);
+  if (!apiKey) {
+    res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Missing/invalid API key (Bearer blrk_...)" }, id: null });
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+  });
+  // keep-alive comment so proxies don't buffer/close it; no messages are pushed in stateless mode
+  res.write(": stream open\n\n");
+  const ping = setInterval(() => { try { res.write(": ping\n\n"); } catch (_) {} }, 25000);
+  req.on("close", () => clearInterval(ping));
+});
+
+// DELETE /mcp: no session to terminate in stateless mode; acknowledge cleanly.
+app.delete("/mcp", (_req, res) => res.status(200).json({ jsonrpc: "2.0", result: {}, id: null }));
 
 const PORT = 8790;
 app.listen(PORT, "127.0.0.1", () => console.log(`BorgLayer MCP (Streamable HTTP) on 127.0.0.1:${PORT}/mcp`));
