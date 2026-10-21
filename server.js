@@ -5,18 +5,19 @@
 //  - All authz (scopes, prepaid-balance limits) enforced server-side by the API.
 //  - A compromised MCP can do nothing beyond what a caller's key already allows.
 //
+// Transport: Streamable HTTP (stateless) at POST/GET/DELETE /mcp — the current MCP
+// transport (SSE is deprecated). Each request carries the caller's Bearer key.
+//
 // The BorgLayer API is a prepaid-USDC-balance account: register / transfer / DNS /
-// formation debit the account balance (insufficient balance -> top up). Every tool
-// here maps 1:1 to a scoped /api/v1 endpoint.
+// formation debit the account balance (insufficient balance -> top up).
 import express from "express";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
 const API_BASE = "https://api.borglayer.com/api/v1";
 
-// Extract + validate the caller's API key from the request (never stored).
-// BorgLayer API keys are blrk_<prefix>_<secret>.
+// Validate + extract the caller's API key (never stored). BorgLayer keys are blrk_<prefix>_<secret>.
 function keyFrom(req) {
   const h = req.headers["authorization"] || "";
   const m = /^Bearer\s+(blrk_[a-z0-9_]+)$/i.exec(h.trim());
@@ -30,7 +31,7 @@ async function callApi(path, apiKey, { method = "GET", body } = {}) {
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "User-Agent": "BorgLayer-MCP/2.0",
+      "User-Agent": "BorgLayer-MCP/3.0",
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -46,122 +47,129 @@ const qs = (obj) => {
   return s ? `?${s}` : "";
 };
 
-function makeServer(apiKey) {
-  const server = new Server(
-    { name: "borglayer", version: "2.0.0" },
-    { capabilities: { tools: {} } }
-  );
+const ok = (r) => ({ content: [{ type: "text", text: JSON.stringify(r.data) }], isError: !r.ok });
 
-  // Each tool declares MCP annotations: title (human label), and exactly one of
-  // ro:true (readOnlyHint — no state change) or destructive:true (destructiveHint —
-  // irreversible/charging). Writes that aren't destructive (add a DNS record,
-  // create a profile) are neither ro nor destructive.
-  const tools = [
-    // ---- read (read-only) ----
-    { name: "search_domains", title: "Search domains", ro: true, desc: "Search available domains across BorgLayer's registrar (priced for your account).",
-      schema: { q: z.string().min(1).max(64) },
-      run: (a) => callApi(`/search${qs({ q: a.q })}`, apiKey) },
-    { name: "list_domains", title: "List my domains", ro: true, desc: "List the domains registered on your BorgLayer account.",
-      schema: {},
-      run: () => callApi(`/domains`, apiKey) },
-    { name: "get_balance", title: "Get account balance", ro: true, desc: "Get your BorgLayer account's prepaid USDC balance (in micro-USDC).",
-      schema: {},
-      run: () => callApi(`/balance`, apiKey) },
-    { name: "list_chains", title: "List funding chains", ro: true, desc: "List supported chains + stablecoins for funding, each with its verified escrow contract.",
-      schema: {},
-      run: () => callApi(`/chains`, apiKey) },
+// Build a fresh McpServer bound to one caller's key. Stateless: one per request.
+function buildServer(apiKey) {
+  const server = new McpServer({ name: "borglayer", version: "3.0.0" });
 
-    // ---- register (debits balance — charging) ----
-    { name: "register_domain", title: "Register a domain", destructive: true, desc: "Register an available domain. Debits your prepaid USDC balance; returns the charge and remaining balance. Requires the domains.register scope. For country-code TLDs, set a default registrant profile first (create_registrant_profile).",
-      schema: { domain: z.string().min(3).max(253), years: z.number().int().min(1).max(10).optional() },
-      run: (a) => callApi(`/register`, apiKey, { method: "POST", body: { domain: a.domain, years: a.years || 1 } }) },
+  // ---- read (read-only) ----
+  server.registerTool("search_domains",
+    { title: "Search domains", description: "Search available domains across BorgLayer's registrar (priced for your account).",
+      inputSchema: { q: z.string().min(1).max(64) }, annotations: { readOnlyHint: true } },
+    async (a) => ok(await callApi(`/search${qs({ q: a.q })}`, apiKey)));
 
-    // ---- transfer in (may debit balance — charging) ----
-    { name: "transfer_in_domain", title: "Transfer a domain in", destructive: true, desc: "Transfer a domain you own at another registrar INTO BorgLayer. Needs the auth/EPP code from your current registrar (unlocked). Free for free ccTLDs; others include a 1-year extension debited from balance. Requires domains.transfer.",
-      schema: { domain: z.string().min(3).max(253), auth_code: z.string().max(255).optional(), whois_privacy: z.boolean().optional() },
-      run: (a) => callApi(`/transfer-in`, apiKey, { method: "POST", body: { domain: a.domain, auth_code: a.auth_code, whois_privacy: a.whois_privacy } }) },
+  server.registerTool("list_domains",
+    { title: "List my domains", description: "List the domains registered on your BorgLayer account.",
+      inputSchema: {}, annotations: { readOnlyHint: true } },
+    async () => ok(await callApi(`/domains`, apiKey)));
 
-    // ---- DNS ----
-    { name: "list_dns", title: "List DNS records", ro: true, desc: "List DNS records for a domain on your account.",
-      schema: { domain: z.string().min(3).max(253) },
-      run: (a) => callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey) },
-    { name: "add_dns_record", title: "Add a DNS record", desc: "Add a DNS record to a domain on your account. Requires dns.write.",
-      schema: { domain: z.string().min(3).max(253), type: z.enum(["A","AAAA","CNAME","MX","TXT","NS","SRV","CAA"]), name: z.string().min(1).max(255), content: z.string().min(1).max(2000), ttl: z.number().int().min(60).max(604800).optional(), priority: z.number().int().min(0).max(65535).optional() },
-      run: (a) => callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey, { method: "POST", body: { type: a.type, name: a.name, content: a.content, ttl: a.ttl, priority: a.priority } }) },
-    { name: "delete_dns_record", title: "Delete a DNS record", destructive: true, desc: "Delete a DNS record by id from a domain on your account. Requires dns.write.",
-      schema: { domain: z.string().min(3).max(253), record_id: z.string().min(1).max(64) },
-      run: (a) => callApi(`/domains/${encodeURIComponent(a.domain)}/dns/${encodeURIComponent(a.record_id)}`, apiKey, { method: "DELETE" }) },
+  server.registerTool("get_balance",
+    { title: "Get account balance", description: "Get your BorgLayer account's prepaid USDC balance (in micro-USDC).",
+      inputSchema: {}, annotations: { readOnlyHint: true } },
+    async () => ok(await callApi(`/balance`, apiKey)));
 
-    // ---- registrant profiles (required owner data for ccTLDs) ----
-    { name: "list_registrant_profiles", title: "List registrant profiles", ro: true, desc: "List the registrant (owner) profiles on your account. Country-code domains require real registrant data.",
-      schema: {},
-      run: () => callApi(`/registrant-profiles`, apiKey) },
-    { name: "create_registrant_profile", title: "Create a registrant profile", desc: "Create a registrant (owner) profile used as the real owner on registrations and transfers. WHOIS privacy masks it publicly where the TLD allows. Requires registrant.write.",
-      schema: { first_name: z.string().max(120), last_name: z.string().max(120), email: z.string().email().max(200), phone: z.string().max(40), address_line1: z.string().max(200), city: z.string().max(120), postal_code: z.string().max(40), country: z.string().length(2), organization_name: z.string().max(200).optional(), address_line2: z.string().max(200).optional(), state: z.string().max(120).optional(), label: z.string().max(120).optional(), is_default: z.boolean().optional() },
-      run: (a) => callApi(`/registrant-profiles`, apiKey, { method: "POST", body: a }) },
-    { name: "delete_registrant_profile", title: "Delete a registrant profile", destructive: true, desc: "Delete a registrant profile by id.",
-      schema: { id: z.string().min(1).max(64) },
-      run: (a) => callApi(`/registrant-profiles/${encodeURIComponent(a.id)}`, apiKey, { method: "DELETE" }) },
+  server.registerTool("list_chains",
+    { title: "List funding chains", description: "List supported chains + stablecoins for funding, each with its verified escrow contract.",
+      inputSchema: {}, annotations: { readOnlyHint: true } },
+    async () => ok(await callApi(`/chains`, apiKey)));
 
-    // ---- LLC formation ----
-    { name: "formation_quote", title: "Quote an LLC formation", ro: true, desc: "Get a price quote to form a US LLC (or other entity) in a given state, with optional EIN and BOI add-ons. Read-only.",
-      schema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), ein: z.boolean().optional(), boi: z.boolean().optional() },
-      run: (a) => callApi(`/formation/quote${qs({ company: a.company, state: a.state, entity: a.entity, ein: a.ein ? 1 : "", boi: a.boi ? 1 : "" })}`, apiKey) },
-    { name: "create_formation", title: "Form an LLC", destructive: true, desc: "Form a US LLC (or other entity). Debits your prepaid USDC balance for the quoted amount, then files. Requires formation.write and a contact object (name/email/address). Returns the order reference + status.",
-      schema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), contact: z.record(z.any()), ein: z.boolean().optional(), boi: z.boolean().optional(), email: z.string().email().max(200).optional() },
-      run: (a) => callApi(`/formation`, apiKey, { method: "POST", body: a }) },
-    { name: "get_formation", title: "Get formation status", ro: true, desc: "Get the status of a formation order by its reference.",
-      schema: { reference: z.string().min(1).max(64) },
-      run: (a) => callApi(`/formation/${encodeURIComponent(a.reference)}`, apiKey) },
-  ];
+  // ---- register (debits balance) ----
+  server.registerTool("register_domain",
+    { title: "Register a domain", description: "Register an available domain. Debits your prepaid USDC balance; returns the charge and remaining balance. Requires the domains.register scope. For country-code TLDs, set a default registrant profile first (create_registrant_profile).",
+      inputSchema: { domain: z.string().min(3).max(253), years: z.number().int().min(1).max(10).optional() },
+      annotations: { destructiveHint: true } },
+    async (a) => ok(await callApi(`/register`, apiKey, { method: "POST", body: { domain: a.domain, years: a.years || 1 } })));
 
-  // zod -> minimal JSON Schema (string/number/boolean) for tools/list
-  const jsonType = (zt) => {
-    const d = zt?._def?.typeName;
-    if (d === "ZodNumber") return "number";
-    if (d === "ZodBoolean") return "boolean";
-    return "string"; // string, enum, record, and optional-wrapped default to string-ish
-  };
+  // ---- transfer in (may debit balance) ----
+  server.registerTool("transfer_in_domain",
+    { title: "Transfer a domain in", description: "Transfer a domain you own at another registrar INTO BorgLayer. Needs the auth/EPP code from your current registrar (unlocked). Free for free ccTLDs; others include a 1-year extension debited from balance. Requires domains.transfer.",
+      inputSchema: { domain: z.string().min(3).max(253), auth_code: z.string().max(255).optional(), whois_privacy: z.boolean().optional() },
+      annotations: { destructiveHint: true } },
+    async (a) => ok(await callApi(`/transfer-in`, apiKey, { method: "POST", body: { domain: a.domain, auth_code: a.auth_code, whois_privacy: a.whois_privacy } })));
 
-  server.setRequestHandler({ method: "tools/list" }, async () => ({
-    tools: tools.map(t => ({
-      name: t.name, description: t.desc,
-      annotations: {
-        title: t.title,
-        readOnlyHint: !!t.ro,
-        destructiveHint: !!t.destructive,
-      },
-      inputSchema: {
-        type: "object",
-        properties: Object.fromEntries(Object.entries(t.schema).map(([k, v]) => {
-          const inner = v?._def?.innerType || v; // unwrap .optional()
-          return [k, { type: jsonType(inner) }];
-        })),
-        required: Object.entries(t.schema).filter(([, v]) => v?._def?.typeName !== "ZodOptional").map(([k]) => k),
-      },
-    })),
-  }));
+  // ---- DNS ----
+  server.registerTool("list_dns",
+    { title: "List DNS records", description: "List DNS records for a domain on your account.",
+      inputSchema: { domain: z.string().min(3).max(253) }, annotations: { readOnlyHint: true } },
+    async (a) => ok(await callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey)));
 
-  server.setRequestHandler({ method: "tools/call" }, async (req) => {
-    const tool = tools.find(t => t.name === req.params.name);
-    if (!tool) return { content: [{ type: "text", text: "unknown tool" }], isError: true };
-    const parsed = z.object(tool.schema).safeParse(req.params.arguments || {});
-    if (!parsed.success) return { content: [{ type: "text", text: "invalid arguments: " + parsed.error.message }], isError: true };
-    const r = await tool.run(parsed.data);
-    return { content: [{ type: "text", text: JSON.stringify(r.data) }], isError: !r.ok };
-  });
+  server.registerTool("add_dns_record",
+    { title: "Add a DNS record", description: "Add a DNS record to a domain on your account. Requires dns.write.",
+      inputSchema: { domain: z.string().min(3).max(253), type: z.enum(["A","AAAA","CNAME","MX","TXT","NS","SRV","CAA"]), name: z.string().min(1).max(255), content: z.string().min(1).max(2000), ttl: z.number().int().min(60).max(604800).optional(), priority: z.number().int().min(0).max(65535).optional() } },
+    async (a) => ok(await callApi(`/domains/${encodeURIComponent(a.domain)}/dns`, apiKey, { method: "POST", body: { type: a.type, name: a.name, content: a.content, ttl: a.ttl, priority: a.priority } })));
+
+  server.registerTool("delete_dns_record",
+    { title: "Delete a DNS record", description: "Delete a DNS record by id from a domain on your account. Requires dns.write.",
+      inputSchema: { domain: z.string().min(3).max(253), record_id: z.string().min(1).max(64) }, annotations: { destructiveHint: true } },
+    async (a) => ok(await callApi(`/domains/${encodeURIComponent(a.domain)}/dns/${encodeURIComponent(a.record_id)}`, apiKey, { method: "DELETE" })));
+
+  // ---- registrant profiles ----
+  server.registerTool("list_registrant_profiles",
+    { title: "List registrant profiles", description: "List the registrant (owner) profiles on your account. Country-code domains require real registrant data.",
+      inputSchema: {}, annotations: { readOnlyHint: true } },
+    async () => ok(await callApi(`/registrant-profiles`, apiKey)));
+
+  server.registerTool("create_registrant_profile",
+    { title: "Create a registrant profile", description: "Create a registrant (owner) profile used as the real owner on registrations and transfers. WHOIS privacy masks it publicly where the TLD allows. Requires registrant.write.",
+      inputSchema: { first_name: z.string().max(120), last_name: z.string().max(120), email: z.string().email().max(200), phone: z.string().max(40), address_line1: z.string().max(200), city: z.string().max(120), postal_code: z.string().max(40), country: z.string().length(2), organization_name: z.string().max(200).optional(), address_line2: z.string().max(200).optional(), state: z.string().max(120).optional(), label: z.string().max(120).optional(), is_default: z.boolean().optional() } },
+    async (a) => ok(await callApi(`/registrant-profiles`, apiKey, { method: "POST", body: a })));
+
+  server.registerTool("delete_registrant_profile",
+    { title: "Delete a registrant profile", description: "Delete a registrant profile by id.",
+      inputSchema: { id: z.string().min(1).max(64) }, annotations: { destructiveHint: true } },
+    async (a) => ok(await callApi(`/registrant-profiles/${encodeURIComponent(a.id)}`, apiKey, { method: "DELETE" })));
+
+  // ---- LLC formation ----
+  server.registerTool("formation_quote",
+    { title: "Quote an LLC formation", description: "Get a price quote to form a US LLC (or other entity) in a given state, with optional EIN and BOI add-ons. Read-only.",
+      inputSchema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), ein: z.boolean().optional(), boi: z.boolean().optional() },
+      annotations: { readOnlyHint: true } },
+    async (a) => ok(await callApi(`/formation/quote${qs({ company: a.company, state: a.state, entity: a.entity, ein: a.ein ? 1 : "", boi: a.boi ? 1 : "" })}`, apiKey)));
+
+  server.registerTool("create_formation",
+    { title: "Form an LLC", description: "Form a US LLC (or other entity). Debits your prepaid USDC balance for the quoted amount, then files. Requires formation.write and a contact object (name/email/address). Returns the order reference + status.",
+      inputSchema: { company: z.string().min(1).max(200), state: z.string().min(2).max(40), entity: z.string().max(20).optional(), contact: z.record(z.any()), ein: z.boolean().optional(), boi: z.boolean().optional(), email: z.string().email().max(200).optional() },
+      annotations: { destructiveHint: true } },
+    async (a) => ok(await callApi(`/formation`, apiKey, { method: "POST", body: a })));
+
+  server.registerTool("get_formation",
+    { title: "Get formation status", description: "Get the status of a formation order by its reference.",
+      inputSchema: { reference: z.string().min(1).max(64) }, annotations: { readOnlyHint: true } },
+    async (a) => ok(await callApi(`/formation/${encodeURIComponent(a.reference)}`, apiKey)));
 
   return server;
 }
 
 const app = express();
+app.use(express.json({ limit: "1mb" }));
+
 app.get("/health", (_req, res) => res.json({ ok: true, service: "borglayer-mcp" }));
-app.get("/sse", async (req, res) => {
+
+// Streamable HTTP, stateless: a new server+transport per request, closed on finish.
+async function handleMcp(req, res) {
   const apiKey = keyFrom(req);
-  if (!apiKey) { res.status(401).json({ error: "Missing/invalid API key (Bearer blrk_...)" }); return; }
-  const transport = new SSEServerTransport("/messages", res);
-  const server = makeServer(apiKey);
-  await server.connect(transport);
-});
+  if (!apiKey) {
+    res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Missing/invalid API key (Bearer blrk_...)" }, id: null });
+    return;
+  }
+  const server = buildServer(apiKey);
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  res.on("close", () => { try { transport.close(); server.close(); } catch (_) {} });
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (e) {
+    if (!res.headersSent) {
+      res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
+    }
+  }
+}
+
+app.post("/mcp", handleMcp);
+// GET/DELETE on /mcp: stateless server has no standalone stream or session to end.
+app.get("/mcp", (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method Not Allowed. Use POST for stateless Streamable HTTP." }, id: null }));
+app.delete("/mcp", (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method Not Allowed." }, id: null }));
+
 const PORT = 8790;
-app.listen(PORT, "127.0.0.1", () => console.log(`BorgLayer MCP on 127.0.0.1:${PORT}`));
+app.listen(PORT, "127.0.0.1", () => console.log(`BorgLayer MCP (Streamable HTTP) on 127.0.0.1:${PORT}/mcp`));

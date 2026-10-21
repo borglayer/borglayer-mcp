@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.borglayerdev/borglayer-mcp",
   "description": "The BorgLayer API for AI agents: search & register domains, transfer domains in, manage DNS, set registrant details, and form US LLCs — paid from a prepaid USDC account balance.",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "homepage": "https://borglayer.com",
   "repository": {
     "url": "https://github.com/borglayer/borglayer-mcp",
@@ -10,8 +10,8 @@
   },
   "remotes": [
     {
-      "type": "sse",
-      "url": "https://mcp.borglayer.com/sse"
+      "type": "streamable-http",
+      "url": "https://mcp.borglayer.com/mcp"
     }
   ],
   "authentication": {

@@ -6,7 +6,7 @@ AI agents manage domains end to end on a BorgLayer account — **search** and
 **DNS**, set **registrant** details, and **form a US LLC** — all behind one
 scoped, per-request API key, paid from a prepaid USDC account balance.
 
-**Endpoint:** `https://mcp.borglayer.com/sse`
+**Endpoint:** `https://mcp.borglayer.com/mcp` (Streamable HTTP)
 
 ## How it works
 
