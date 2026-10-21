@@ -25,7 +25,12 @@ function keyFrom(req) {
 }
 
 // Fixed API caller — no dynamic URLs, no user-controlled hosts (SSRF-safe).
+// Key enforcement lives here: a tool invoked without a valid blrk_ key gets a clear
+// auth error (discovery/handshake succeeded without one; actually DOING anything needs it).
 async function callApi(path, apiKey, { method = "GET", body } = {}) {
+  if (!apiKey) {
+    return { ok: false, status: 401, data: { error: "unauthenticated", message: "This tool needs a BorgLayer API key. Add it to the connector as a request header: Authorization: Bearer blrk_... (get one and top up its balance at https://borglayer.com)." } };
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     method,
     headers: {
@@ -147,12 +152,12 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/health", (_req, res) => res.json({ ok: true, service: "borglayer-mcp" }));
 
 // Streamable HTTP, stateless: a new server+transport per request, closed on finish.
+// NOTE: we do NOT 401 the HTTP request when the key is absent. MCP clients (incl.
+// Claude's connector probe) must be able to complete `initialize` and `tools/list`
+// to discover the server. The API key is enforced per tool call instead (see
+// buildServer): a tool invoked without a valid blrk_ key returns an auth error.
 async function handleMcp(req, res) {
-  const apiKey = keyFrom(req);
-  if (!apiKey) {
-    res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Missing/invalid API key (Bearer blrk_...)" }, id: null });
-    return;
-  }
+  const apiKey = keyFrom(req); // may be null — discovery is allowed, tools are gated
   const server = buildServer(apiKey);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => { try { transport.close(); server.close(); } catch (_) {} });
@@ -173,11 +178,7 @@ app.post("/mcp", handleMcp);
 // (and keep the key gate) rather than 405 — a 405 here makes some MCP clients report the
 // whole connection as failed.
 app.get("/mcp", (req, res) => {
-  const apiKey = keyFrom(req);
-  if (!apiKey) {
-    res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Missing/invalid API key (Bearer blrk_...)" }, id: null });
-    return;
-  }
+  // No key gate here — this is the discovery/stream-open path. Tools enforce the key.
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
